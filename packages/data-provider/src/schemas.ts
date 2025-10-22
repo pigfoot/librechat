@@ -723,7 +723,7 @@ export const tConversationSchema = z.object({
   /* OpenAI: Verbosity control */
   verbosity: eVerbositySchema.optional().nullable(),
   /* OpenAI: use Responses API */
-  useResponsesApi: z.boolean().optional(),
+  useResponsesApi: z.boolean().optional().default(true),
   /* OpenAI Responses API / Anthropic API / Google API */
   web_search: z.boolean().optional(),
   /* disable streaming */

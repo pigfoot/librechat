@@ -45,7 +45,7 @@ const useSetIndexOptions: TUseSetOptions = (preset = false) => {
         currentEndpoint === EModelEndpoint.custom;
 
       if (isOpenAICompatible) {
-        const currentUseResponsesApi = conversation?.useResponsesApi ?? false;
+        const currentUseResponsesApi = conversation?.useResponsesApi ?? true;
         if (!currentUseResponsesApi) {
           update['useResponsesApi'] = true;
         }
