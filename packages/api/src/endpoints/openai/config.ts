@@ -109,7 +109,8 @@ export function getOpenAIConfig(
 
   if (azure && !isAnthropic) {
     const constructAzureResponsesApi = () => {
-      if (!llmConfig.useResponsesApi || !azure) {
+      // Only skip if useResponsesApi is explicitly false (default is true per FR-001)
+      if (llmConfig.useResponsesApi === false || !azure) {
         return;
       }
 
@@ -124,10 +125,8 @@ export function getOpenAIConfig(
         ...configOptions.defaultHeaders,
         'api-key': apiKey,
       };
-      configOptions.defaultQuery = {
-        ...configOptions.defaultQuery,
-        'api-version': configOptions.defaultQuery?.['api-version'] ?? 'preview',
-      };
+      // When ResponsesAPI is enabled (true or undefined/default), omit API version parameter (FR-005)
+      // Azure ResponsesAPI endpoints do not require api-version in query
     };
 
     constructAzureResponsesApi();

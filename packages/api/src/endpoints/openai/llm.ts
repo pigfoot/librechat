@@ -155,9 +155,11 @@ export function getOpenAILLMConfig({
     llmConfig.include_reasoning = true;
   }
 
+  // When ResponsesAPI is enabled (true or undefined/default) or using OpenRouter
+  // or for non-OpenAI/Azure endpoints that support reasoning
   if (
     hasReasoningParams({ reasoning_effort, reasoning_summary }) &&
-    (llmConfig.useResponsesApi === true ||
+    (llmConfig.useResponsesApi !== false ||
       (endpoint !== EModelEndpoint.openAI && endpoint !== EModelEndpoint.azureOpenAI))
   ) {
     llmConfig.reasoning = removeNullishValues(
@@ -230,14 +232,16 @@ export function getOpenAILLMConfig({
     });
   }
 
-  if (modelKwargs.verbosity && llmConfig.useResponsesApi === true) {
+  // When ResponsesAPI is enabled (true or undefined/default), nest verbosity under text
+  if (modelKwargs.verbosity && llmConfig.useResponsesApi !== false) {
     modelKwargs.text = { verbosity: modelKwargs.verbosity };
     delete modelKwargs.verbosity;
   }
 
   if (llmConfig.model && /\bgpt-[5-9]\b/i.test(llmConfig.model) && llmConfig.maxTokens != null) {
+    // Default is true (FR-001), so only use max_completion_tokens if explicitly false
     const paramName =
-      llmConfig.useResponsesApi === true ? 'max_output_tokens' : 'max_completion_tokens';
+      llmConfig.useResponsesApi !== false ? 'max_output_tokens' : 'max_completion_tokens';
     modelKwargs[paramName] = llmConfig.maxTokens;
     delete llmConfig.maxTokens;
     hasModelKwargs = true;
@@ -279,7 +283,8 @@ export function getOpenAILLMConfig({
   Object.assign(llmConfig, updatedAzure);
 
   const constructAzureResponsesApi = () => {
-    if (!llmConfig.useResponsesApi) {
+    // Only skip if useResponsesApi is explicitly false (default is true per FR-001)
+    if (llmConfig.useResponsesApi === false) {
       return;
     }
 

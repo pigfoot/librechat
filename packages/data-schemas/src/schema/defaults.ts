@@ -133,6 +133,7 @@ export const conversationPreset = {
   },
   useResponsesApi: {
     type: Boolean,
+    default: true,
   },
   /** OpenAI Responses API / Anthropic API / Google API */
   web_search: {

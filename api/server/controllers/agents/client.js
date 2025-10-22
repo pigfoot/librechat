@@ -1104,6 +1104,8 @@ class AgentClient extends BaseClient {
     /** @type {import('@librechat/agents').ClientOptions} */
     let clientOptions = {
       model: agent.model || agent.model_parameters.model,
+      // Include all model_parameters (e.g., useResponsesApi) for proper API selection
+      ...agent.model_parameters,
     };
 
     let titleProviderConfig = getProviderConfig({ provider: endpoint, appConfig });

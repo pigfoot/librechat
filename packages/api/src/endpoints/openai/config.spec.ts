@@ -725,9 +725,8 @@ describe('getOpenAIConfig', () => {
       expect(result.configOptions?.defaultHeaders).toMatchObject({
         'api-key': mockApiKey,
       });
-      expect(result.configOptions?.defaultQuery).toMatchObject({
-        'api-version': 'preview',
-      });
+      // FR-005: When ResponsesAPI is enabled, API version parameter should be omitted
+      expect(result.configOptions?.defaultQuery?.['api-version']).toBeUndefined();
       expect(result.llmConfig.apiKey).toBe(mockApiKey);
       expect(
         (result.llmConfig as Record<string, unknown>).azureOpenAIApiDeploymentName,
