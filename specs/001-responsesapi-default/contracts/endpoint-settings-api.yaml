@@ -1,0 +1,169 @@
+openapi: 3.0.0
+info:
+  title: ResponsesAPI Settings API
+  version: 1.0.0
+  description: API contracts for ResponsesAPI default enablement feature
+
+paths:
+  /api/conversations/{conversationId}/settings:
+    get:
+      summary: Get conversation endpoint settings
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current conversation settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSettings'
+
+    patch:
+      summary: Update conversation endpoint settings
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdate'
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSettings'
+
+  /api/conversations/new:
+    post:
+      summary: Create new conversation with default settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                  enum: [openai, azure, custom]
+                model:
+                  type: string
+      responses:
+        '201':
+          description: New conversation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSettings'
+
+  /api/endpoints/{endpoint}/defaults:
+    get:
+      summary: Get default settings for endpoint type
+      parameters:
+        - name: endpoint
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [openai, azure, custom]
+      responses:
+        '200':
+          description: Default endpoint configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointDefaults'
+
+components:
+  schemas:
+    ConversationSettings:
+      type: object
+      required:
+        - conversationId
+        - endpoint
+        - responsesAPI
+        - createdAt
+      properties:
+        conversationId:
+          type: string
+          description: Unique conversation identifier
+        endpoint:
+          type: string
+          enum: [openai, azure, custom]
+          description: Selected endpoint type
+        responsesAPI:
+          type: boolean
+          description: Whether ResponsesAPI is enabled
+          default: true
+        createdAt:
+          type: string
+          format: date-time
+          description: When conversation was created
+        isNewConversation:
+          type: boolean
+          description: Flag for new vs existing conversations
+
+    SettingsUpdate:
+      type: object
+      properties:
+        responsesAPI:
+          type: boolean
+          description: Toggle ResponsesAPI on/off
+        endpoint:
+          type: string
+          enum: [openai, azure, custom]
+          description: Switch to different endpoint
+
+    EndpointDefaults:
+      type: object
+      required:
+        - endpoint
+        - responsesAPI
+      properties:
+        endpoint:
+          type: string
+          enum: [openai, azure, custom]
+        responsesAPI:
+          type: boolean
+          default: true
+          description: Default ResponsesAPI setting for new conversations
+        apiVersion:
+          type: string
+          nullable: true
+          description: Azure API version (null when responsesAPI is true)
+
+    APIRequest:
+      type: object
+      required:
+        - messages
+        - model
+        - responsesAPI
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+              content:
+                type: string
+        model:
+          type: string
+        responsesAPI:
+          type: boolean
+        azureApiVersion:
+          type: string
+          nullable: true
+          description: Conditionally included for Azure endpoints
