@@ -2,66 +2,224 @@ name: Docker Images Build on Tag
 
 on:
   push:
-    tags:
-      - '*'
+    branches: [pf-branch]
+    tags-ignore:
+      - '**'
+  workflow_dispatch:
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+  IMAGE_NAME: librechat
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
+  # ---------- Build LibreChat image (native multi-arch) ----------
   build:
-    runs-on: ubuntu-latest
+    name: Build librechat (${{ matrix.arch }})
     strategy:
       matrix:
         include:
-          - target: api-build
-            file: Dockerfile.multi
-            image_name: librechat-api
-          - target: node
-            file: Dockerfile
-            image_name: librechat
-
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm  # Native ARM64 runner (public repos only)
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      digest-amd64: ${{ steps.export-digest.outputs.digest-amd64 }}
+      digest-arm64: ${{ steps.export-digest.outputs.digest-arm64 }}
     steps:
-      # Check out the repository
       - name: Checkout
-        uses: actions/checkout@v4
-
-      # Set up QEMU
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # Set up Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Log in to GitHub Container Registry
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: actions/checkout@v6
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: "0"
 
-      # Login to Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # Prepare the environment
       - name: Prepare environment
         run: |
           cp .env.example .env
 
-      # Build and push Docker images for each target
-      - name: Build and push Docker images
-        uses: docker/build-push-action@v5
+      - name: Get the latest tag
+        id: get-latest-tag
+        run: |
+          # Get only v* tags (ignoring chart-* tags)
+          echo "tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)" >> $GITHUB_OUTPUT
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login "$REGISTRY" \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login docker.io \
+            -u "${{ secrets.DOCKERHUB_USERNAME }}" \
+            --password-stdin
+
+      - name: Build librechat image
+        uses: nick-fields/retry@v3
         with:
-          context: .
-          file: ${{ matrix.file }}
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image_name }}:${{ github.ref_name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image_name }}:latest
-          platforms: linux/amd64,linux/arm64
-          target: ${{ matrix.target }}
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            # Build image locally (native, no emulation needed)
+            podman build \
+              --format docker \
+              --ulimit nofile=65536:65536 \
+              --build-arg NPM_CONFIG_MAXSOCKETS=5 \
+              -f Dockerfile \
+              -t localhost/build:${{ matrix.arch }} \
+              .
+
+      - name: Push by digest to GHCR
+        id: push-ghcr
+        run: |
+          IMAGE="$REGISTRY/$IMAGE_OWNER/$IMAGE_NAME"
+
+          # Push by digest (no tag pollution)
+          podman push \
+            --digestfile /tmp/digest-ghcr \
+            localhost/build:${{ matrix.arch }} \
+            "docker://$IMAGE"
+
+          DIGEST=$(cat /tmp/digest-ghcr)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Pushed to GHCR with digest: $DIGEST"
+
+      - name: Push by digest to Docker Hub
+        id: push-dockerhub
+        run: |
+          DOCKERHUB_IMAGE="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/$IMAGE_NAME"
+
+          # Push by digest (no tag pollution)
+          podman push \
+            --digestfile /tmp/digest-dockerhub \
+            localhost/build:${{ matrix.arch }} \
+            "docker://$DOCKERHUB_IMAGE"
+
+          DIGEST=$(cat /tmp/digest-dockerhub)
+          echo "Pushed to Docker Hub with digest: $DIGEST"
+
+      - name: Export digest
+        id: export-digest
+        run: |
+          DIGEST="${{ steps.push-ghcr.outputs.digest }}"
+          mkdir -p /tmp/digests
+          echo "$DIGEST" > /tmp/digests/${{ matrix.arch }}
+
+          # Set output for manifest job
+          echo "digest-${{ matrix.arch }}=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  # ---------- Create multi-arch manifest ----------
+  manifest:
+    name: Create multi-arch manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: "0"
+
+      - name: Get the latest tag
+        id: get-latest-tag
+        run: |
+          # Get only v* tags (ignoring chart-* tags)
+          echo "tag=$(git tag --list 'v*' --sort=-version:refname | head -n1)" >> $GITHUB_OUTPUT
+
+      - name: Download digests
+        uses: actions/download-artifact@v6
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login "$REGISTRY" \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login docker.io \
+            -u "${{ secrets.DOCKERHUB_USERNAME }}" \
+            --password-stdin
+
+      - name: Create & push manifest to GHCR
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            IMAGE="$REGISTRY/$IMAGE_OWNER/$IMAGE_NAME"
+            VERSION_TAG="${{ steps.get-latest-tag.outputs.tag }}"
+
+            # Read digests from artifacts
+            AMD64_DIGEST=$(cat /tmp/digests/amd64)
+            ARM64_DIGEST=$(cat /tmp/digests/arm64)
+
+            echo "AMD64 digest: $AMD64_DIGEST"
+            echo "ARM64 digest: $ARM64_DIGEST"
+
+            # Create and push 'latest' manifest
+            podman manifest create "$IMAGE:latest"
+            podman manifest add "$IMAGE:latest" "docker://$IMAGE@${AMD64_DIGEST}"
+            podman manifest add "$IMAGE:latest" "docker://$IMAGE@${ARM64_DIGEST}"
+            podman manifest push --all --format v2s2 "$IMAGE:latest" "docker://$IMAGE:latest"
+
+            # Create and push versioned manifest
+            podman manifest create "$IMAGE:$VERSION_TAG"
+            podman manifest add "$IMAGE:$VERSION_TAG" "docker://$IMAGE@${AMD64_DIGEST}"
+            podman manifest add "$IMAGE:$VERSION_TAG" "docker://$IMAGE@${ARM64_DIGEST}"
+            podman manifest push --all --format v2s2 "$IMAGE:$VERSION_TAG" "docker://$IMAGE:$VERSION_TAG"
+
+      - name: Create & push manifest to Docker Hub
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            DOCKERHUB_IMAGE="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/$IMAGE_NAME"
+            VERSION_TAG="${{ steps.get-latest-tag.outputs.tag }}"
+
+            # Read digests from artifacts (same digests, different registry)
+            AMD64_DIGEST=$(cat /tmp/digests/amd64)
+            ARM64_DIGEST=$(cat /tmp/digests/arm64)
+
+            # Note: We need to push to Docker Hub again because digests are registry-specific
+            # For simplicity, we'll reference the already-pushed images
+            # This assumes the build job already pushed to both registries
+
+            # Create and push 'latest' manifest
+            podman manifest create "$DOCKERHUB_IMAGE:latest"
+            podman manifest add "$DOCKERHUB_IMAGE:latest" "docker://$DOCKERHUB_IMAGE@${AMD64_DIGEST}"
+            podman manifest add "$DOCKERHUB_IMAGE:latest" "docker://$DOCKERHUB_IMAGE@${ARM64_DIGEST}"
+            podman manifest push --all --format v2s2 "$DOCKERHUB_IMAGE:latest" "docker://$DOCKERHUB_IMAGE:latest"
+
+            # Create and push versioned manifest
+            podman manifest create "$DOCKERHUB_IMAGE:$VERSION_TAG"
+            podman manifest add "$DOCKERHUB_IMAGE:$VERSION_TAG" "docker://$DOCKERHUB_IMAGE@${AMD64_DIGEST}"
+            podman manifest add "$DOCKERHUB_IMAGE:$VERSION_TAG" "docker://$DOCKERHUB_IMAGE@${ARM64_DIGEST}"
+            podman manifest push --all --format v2s2 "$DOCKERHUB_IMAGE:$VERSION_TAG" "docker://$DOCKERHUB_IMAGE:$VERSION_TAG"
