@@ -23,7 +23,7 @@ let i = 0;
  * @function loadCustomConfig
  * @returns {Promise<TCustomConfig | null>} A promise that resolves to null or the custom config object.
  * */
-async function loadCustomConfig(printConfig = true) {
+async function loadCustomConfig(printConfig = false) {
   // Use CONFIG_PATH if set, otherwise fallback to defaultConfigPath
   const configPath = process.env.CONFIG_PATH || defaultConfigPath;
 
